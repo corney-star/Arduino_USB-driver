@@ -101,9 +101,9 @@ exit:
 	return retval;
 }
 
-static int skel_release(struct inode *inode, struct file *file)
+static int ard_release(struct inode *inode, struct file *file)
 {
-	struct usb_skel *dev;
+	struct ard_usb *dev;
 
 	dev = file->private_data;
 	if (dev == NULL)
@@ -113,13 +113,13 @@ static int skel_release(struct inode *inode, struct file *file)
 	usb_autopm_put_interface(dev->interface);
 
 	/* decrement the count on our device */
-	kref_put(&dev->kref, skel_delete);
+	kref_put(&dev->kref, ard_delete);
 	return 0;
 }
 
-static int skel_flush(struct file *file, fl_owner_t id)
+static int ard_flush(struct file *file, fl_owner_t id)
 {
-	struct usb_skel *dev;
+	struct ard_usb *dev;
 	int res;
 
 	dev = file->private_data;
@@ -128,7 +128,7 @@ static int skel_flush(struct file *file, fl_owner_t id)
 
 	/* wait for io to stop */
 	mutex_lock(&dev->io_mutex);
-	skel_draw_down(dev);
+	ard_draw_down(dev);
 
 	/* read out errors, leave subsequent opens a clean slate */
 	spin_lock_irq(&dev->err_lock);
@@ -141,9 +141,9 @@ static int skel_flush(struct file *file, fl_owner_t id)
 	return res;
 }
 
-static void skel_read_bulk_callback(struct urb *urb)
+static void ard_read_bulk_callback(struct urb *urb)
 {
-	struct usb_skel *dev;
+	struct ard_usb *dev;
 	unsigned long flags;
 
 	dev = urb->context;
