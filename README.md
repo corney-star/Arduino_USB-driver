@@ -47,5 +47,13 @@ echo hello | sudo tee /dev/ard192
 sudo dd if=/dev/ard192 bs=64 count=1 status=none
 ```
 
+## FOP ioctl
+
+User programs can include `arduino_usb.h` and call:
+
+- `ARD_IOCTL_GET_INFO`: get VID/PID, interface number, and bulk endpoint info.
+- `ARD_IOCTL_CLEAR_ERRORS`: clear the driver's stored error state.
+- `ARD_IOCTL_CLEAR_HALT`: clear halt on both bulk endpoints.
+
 If another kernel driver already owns the interface, unbind that driver first
 or add the relevant blacklist rule for your test environment.

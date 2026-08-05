@@ -2,22 +2,19 @@
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/module.h>
+#include <linux/string.h>
 #include <linux/mutex.h>
 #include <linux/semaphore.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/usb.h>
 
+#include "arduino_usb.h"
+
 #define USB_ARD_MINOR_BASE	192
 #define MAX_TRANSFER		(PAGE_SIZE - 512)
 #define WRITES_IN_FLIGHT	8
 
-/*
- * Replace or extend these IDs with the VID/PID shown by `lsusb` for your board.
- * Many classic Arduino boards expose CDC ACM serial interfaces and are already
- * handled by cdc_acm; this driver is intended for boards/firmware exposing bulk
- * IN and bulk OUT endpoints.
- */
 #define USB_ARD_VENDOR_ID	0x2341
 #define USB_ARD_PRODUCT_ID	0x0043
 
@@ -381,6 +378,79 @@ error:
 	return retval;
 }
 
+static long ard_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct ard_usb *dev = file->private_data;
+	struct ard_usb_info info;
+	int retval = 0;
+
+	if (_IOC_TYPE(cmd) != ARD_IOC_MAGIC)
+		return -ENOTTY;
+
+	if (!dev)
+		return -ENODEV;
+
+	switch (cmd) {
+	case ARD_IOCTL_GET_INFO:
+		retval = mutex_lock_interruptible(&dev->io_mutex);
+		if (retval)
+			return retval;
+
+		if (dev->disconnected) {
+			mutex_unlock(&dev->io_mutex);
+			return -ENODEV;
+		}
+
+		memset(&info, 0, sizeof(info));
+		info.vendor_id = le16_to_cpu(dev->udev->descriptor.idVendor);
+		info.product_id = le16_to_cpu(dev->udev->descriptor.idProduct);
+		info.bulk_in_endpoint = dev->bulk_in_endpoint_addr;
+		info.bulk_out_endpoint = dev->bulk_out_endpoint_addr;
+		info.bulk_in_max_packet = dev->bulk_in_size;
+		info.interface_number =
+			dev->interface->cur_altsetting->desc.bInterfaceNumber;
+		mutex_unlock(&dev->io_mutex);
+
+		if (copy_to_user((void __user *)arg, &info, sizeof(info)))
+			return -EFAULT;
+		return 0;
+
+	case ARD_IOCTL_CLEAR_ERRORS:
+		spin_lock_irq(&dev->err_lock);
+		dev->errors = 0;
+		spin_unlock_irq(&dev->err_lock);
+		return 0;
+
+	case ARD_IOCTL_CLEAR_HALT:
+		retval = mutex_lock_interruptible(&dev->io_mutex);
+		if (retval)
+			return retval;
+
+		if (dev->disconnected) {
+			mutex_unlock(&dev->io_mutex);
+			return -ENODEV;
+		}
+
+		retval = usb_clear_halt(dev->udev,
+					usb_rcvbulkpipe(dev->udev,
+							dev->bulk_in_endpoint_addr));
+		if (!retval)
+			retval = usb_clear_halt(dev->udev,
+						usb_sndbulkpipe(dev->udev,
+								dev->bulk_out_endpoint_addr));
+		if (!retval) {
+			spin_lock_irq(&dev->err_lock);
+			dev->errors = 0;
+			spin_unlock_irq(&dev->err_lock);
+		}
+		mutex_unlock(&dev->io_mutex);
+		return retval;
+
+	default:
+		return -ENOTTY;
+	}
+}
+
 static const struct file_operations ard_fops = {
 	.owner =	THIS_MODULE,
 	.read =		ard_read,
@@ -389,6 +459,10 @@ static const struct file_operations ard_fops = {
 	.release =	ard_release,
 	.flush =	ard_flush,
 	.llseek =	noop_llseek,
+	.unlocked_ioctl = ard_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	ard_ioctl,
+#endif
 };
 
 static struct usb_class_driver ard_class = {
